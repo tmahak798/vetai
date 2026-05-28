@@ -4,15 +4,24 @@ import json
 import numpy as np
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
+from tensorflow.keras.models import load_model
 from PIL import Image
+import tensorflow as tf
 
-# Use tflite-runtime instead of full tensorflow
-from tensorflow import lite as tflite
+# Limit TF memory growth
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
+# Limit CPU threads to save RAM
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.threading.set_intra_op_parallelism_threads(1)
+
 app = Flask(__name__)
 
-# ── Config ─────────────────────────────────────────────────
 UPLOAD_FOLDER   = "static/uploads"
-MODEL_PATH      = "model.tflite"
+MODEL_PATH      = "best_model.h5"
 LABELS_PATH     = "class_labels.json"
 MEDICATION_PATH = "medication.csv"
 IMG_SIZE        = (224, 224)
@@ -20,39 +29,27 @@ IMG_SIZE        = (224, 224)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ── Load TFLite model ───────────────────────────────────────
-print("Loading TFLite model...")
-interpreter = tflite.Interpreter(model_path=MODEL_PATH)
-interpreter.allocate_tensors()
-input_details  = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-print("✓ TFLite model loaded")
+print("Loading model...")
+model = load_model(MODEL_PATH)
+model.trainable = False  # freeze to save memory
+print("✓ Model loaded")
 
-# ── Load labels ─────────────────────────────────────────────
 with open(LABELS_PATH, "r") as f:
     raw_labels = json.load(f)
     class_labels = {int(k): v for k, v in raw_labels.items()}
 print("✓ Labels loaded:", class_labels)
 
-# ── Load medication CSV ─────────────────────────────────────
 medication_df = pd.read_csv(MEDICATION_PATH)
 medication_df["disease"] = medication_df["disease"].str.strip()
 print("✓ Medication CSV loaded")
 print("✓ App ready\n")
 
-# ── Helpers ─────────────────────────────────────────────────
 def preprocess_image(img_path):
     img = Image.open(img_path).convert("RGB")
     img = img.resize(IMG_SIZE, Image.LANCZOS)
     img_array = np.array(img, dtype=np.float32) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
-
-def predict_tflite(img_array):
-    interpreter.set_tensor(input_details[0]['index'], img_array)
-    interpreter.invoke()
-    output = interpreter.get_tensor(output_details[0]['index'])
-    return output[0]
 
 def get_medication(disease_name):
     row = medication_df[medication_df["disease"] == disease_name]
@@ -68,7 +65,6 @@ def get_medication(disease_name):
         "precautions": row.iloc[0]["precautions"]
     }
 
-# ── Routes ──────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -77,7 +73,6 @@ def index():
 def predict():
     if "image" not in request.files:
         return jsonify({"error": "No image uploaded"}), 400
-
     file = request.files["image"]
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
@@ -87,9 +82,9 @@ def predict():
 
     try:
         img_array     = preprocess_image(img_path)
-        predictions   = predict_tflite(img_array)
-        predicted_idx = int(np.argmax(predictions))
-        confidence    = float(np.max(predictions)) * 100
+        predictions   = model.predict(img_array, verbose=0)
+        predicted_idx = int(np.argmax(predictions[0]))
+        confidence    = float(np.max(predictions[0])) * 100
         disease_name  = class_labels[predicted_idx]
         med_info      = get_medication(disease_name)
 
@@ -111,7 +106,7 @@ def predict():
 def health():
     return jsonify({
         "status":  "ok",
-        "model":   "MobileNetV2 TFLite",
+        "model":   "MobileNetV2",
         "classes": list(class_labels.values())
     })
 
