@@ -7,8 +7,7 @@ from flask import Flask, request, jsonify, render_template
 from PIL import Image
 
 # Use tflite-runtime instead of full tensorflow
-import tflite_runtime.interpreter as tflite
-
+from tensorflow import lite as tflite
 app = Flask(__name__)
 
 # ── Config ─────────────────────────────────────────────────
