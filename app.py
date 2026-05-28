@@ -1,10 +1,10 @@
 import os
+import gc
 import json
 import numpy as np
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
 from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
 from PIL import Image
 
 app = Flask(__name__)
@@ -17,14 +17,14 @@ MEDICATION_PATH = "medication.csv"
 IMG_SIZE        = (224, 224)
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # create folder if missing
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 # ── Load model, labels, medication CSV once at startup ────
 print("Loading model...")
 model = load_model(MODEL_PATH)
 print("✓ Model loaded")
 
 with open(LABELS_PATH, "r") as f:
-    # keys are strings when loaded from JSON — convert to int
     raw_labels = json.load(f)
     class_labels = {int(k): v for k, v in raw_labels.items()}
 print("✓ Labels loaded:", class_labels)
@@ -34,7 +34,7 @@ medication_df["disease"] = medication_df["disease"].str.strip()
 print("✓ Medication CSV loaded")
 print("✓ App ready\n")
 
-# ── Helper: preprocess uploaded image ─────────────────────
+# ── Helpers ───────────────────────────────────────────────
 def preprocess_image(img_path):
     img = Image.open(img_path).convert("RGB")
     img = img.resize(IMG_SIZE, Image.LANCZOS)
@@ -42,44 +42,6 @@ def preprocess_image(img_path):
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    if "image" not in request.files:
-        return jsonify({"error": "No image uploaded"}), 400
-
-    file = request.files["image"]
-
-    if file.filename == "":
-        return jsonify({"error": "No file selected"}), 400
-
-    img_path = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
-    file.save(img_path)
-
-    try:
-        img_array    = preprocess_image(img_path)
-        predictions  = model.predict(img_array, verbose=0)
-        predicted_idx = int(np.argmax(predictions[0]))
-        confidence    = float(np.max(predictions[0])) * 100
-        disease_name  = class_labels[predicted_idx]
-        med_info      = get_medication(disease_name)
-
-        # Free memory immediately
-        del img_array, predictions
-        import gc
-        gc.collect()
-
-        return jsonify({
-            "disease":     disease_name,
-            "confidence":  round(confidence, 2),
-            "medicine":    med_info["medicine"],
-            "treatment":   med_info["treatment"],
-            "precautions": med_info["precautions"],
-            "image_path":  f"static/uploads/{file.filename}"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ── Helper: get medication info for predicted disease ──────
 def get_medication(disease_name):
     row = medication_df[medication_df["disease"] == disease_name]
     if row.empty:
@@ -94,7 +56,7 @@ def get_medication(disease_name):
         "precautions": row.iloc[0]["precautions"]
     }
 
-# ── Routes ─────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -105,36 +67,41 @@ def predict():
         return jsonify({"error": "No image uploaded"}), 400
 
     file = request.files["image"]
-
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
 
-    # Save uploaded image
     img_path = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
     file.save(img_path)
 
-    # Preprocess and predict
-    img_array    = preprocess_image(img_path)
-    predictions  = model.predict(img_array)
-    predicted_idx = int(np.argmax(predictions[0]))
-    confidence    = float(np.max(predictions[0])) * 100
-    disease_name  = class_labels[predicted_idx]
+    try:
+        img_array     = preprocess_image(img_path)
+        predictions   = model.predict(img_array, verbose=0)
+        predicted_idx = int(np.argmax(predictions[0]))
+        confidence    = float(np.max(predictions[0])) * 100
+        disease_name  = class_labels[predicted_idx]
+        med_info      = get_medication(disease_name)
 
-    # Get medication info
-    med_info = get_medication(disease_name)
+        del img_array, predictions
+        gc.collect()
 
-    return jsonify({
-        "disease":     disease_name,
-        "confidence":  round(confidence, 2),
-        "medicine":    med_info["medicine"],
-        "treatment":   med_info["treatment"],
-        "precautions": med_info["precautions"],
-        "image_path":  f"static/uploads/{file.filename}"
-    })
+        return jsonify({
+            "disease":     disease_name,
+            "confidence":  round(confidence, 2),
+            "medicine":    med_info["medicine"],
+            "treatment":   med_info["treatment"],
+            "precautions": med_info["precautions"],
+            "image_path":  f"static/uploads/{file.filename}"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "model": "MobileNetV2", "classes": list(class_labels.values())})
+    return jsonify({
+        "status":  "ok",
+        "model":   "MobileNetV2",
+        "classes": list(class_labels.values())
+    })
 
 if __name__ == "__main__":
     app.run(debug=True)
