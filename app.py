@@ -17,7 +17,7 @@ MEDICATION_PATH = "medication.csv"
 IMG_SIZE        = (224, 224)
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # create folder if missing
 # ── Load model, labels, medication CSV once at startup ────
 print("Loading model...")
 model = load_model(MODEL_PATH)
