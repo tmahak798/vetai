@@ -4,14 +4,16 @@ import json
 import numpy as np
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
-from tensorflow.keras.models import load_model
 from PIL import Image
+
+# Use tflite-runtime instead of full tensorflow
+import tflite_runtime.interpreter as tflite
 
 app = Flask(__name__)
 
-# ── Config ────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────
 UPLOAD_FOLDER   = "static/uploads"
-MODEL_PATH      = "best_model.h5"
+MODEL_PATH      = "model.tflite"
 LABELS_PATH     = "class_labels.json"
 MEDICATION_PATH = "medication.csv"
 IMG_SIZE        = (224, 224)
@@ -19,28 +21,39 @@ IMG_SIZE        = (224, 224)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ── Load model, labels, medication CSV once at startup ────
-print("Loading model...")
-model = load_model(MODEL_PATH)
-print("✓ Model loaded")
+# ── Load TFLite model ───────────────────────────────────────
+print("Loading TFLite model...")
+interpreter = tflite.Interpreter(model_path=MODEL_PATH)
+interpreter.allocate_tensors()
+input_details  = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+print("✓ TFLite model loaded")
 
+# ── Load labels ─────────────────────────────────────────────
 with open(LABELS_PATH, "r") as f:
     raw_labels = json.load(f)
     class_labels = {int(k): v for k, v in raw_labels.items()}
 print("✓ Labels loaded:", class_labels)
 
+# ── Load medication CSV ─────────────────────────────────────
 medication_df = pd.read_csv(MEDICATION_PATH)
 medication_df["disease"] = medication_df["disease"].str.strip()
 print("✓ Medication CSV loaded")
 print("✓ App ready\n")
 
-# ── Helpers ───────────────────────────────────────────────
+# ── Helpers ─────────────────────────────────────────────────
 def preprocess_image(img_path):
     img = Image.open(img_path).convert("RGB")
     img = img.resize(IMG_SIZE, Image.LANCZOS)
     img_array = np.array(img, dtype=np.float32) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
+
+def predict_tflite(img_array):
+    interpreter.set_tensor(input_details[0]['index'], img_array)
+    interpreter.invoke()
+    output = interpreter.get_tensor(output_details[0]['index'])
+    return output[0]
 
 def get_medication(disease_name):
     row = medication_df[medication_df["disease"] == disease_name]
@@ -56,7 +69,7 @@ def get_medication(disease_name):
         "precautions": row.iloc[0]["precautions"]
     }
 
-# ── Routes ────────────────────────────────────────────────
+# ── Routes ──────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -75,9 +88,9 @@ def predict():
 
     try:
         img_array     = preprocess_image(img_path)
-        predictions   = model.predict(img_array, verbose=0)
-        predicted_idx = int(np.argmax(predictions[0]))
-        confidence    = float(np.max(predictions[0])) * 100
+        predictions   = predict_tflite(img_array)
+        predicted_idx = int(np.argmax(predictions))
+        confidence    = float(np.max(predictions)) * 100
         disease_name  = class_labels[predicted_idx]
         med_info      = get_medication(disease_name)
 
@@ -99,7 +112,7 @@ def predict():
 def health():
     return jsonify({
         "status":  "ok",
-        "model":   "MobileNetV2",
+        "model":   "MobileNetV2 TFLite",
         "classes": list(class_labels.values())
     })
 
