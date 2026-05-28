@@ -37,10 +37,47 @@ print("✓ App ready\n")
 # ── Helper: preprocess uploaded image ─────────────────────
 def preprocess_image(img_path):
     img = Image.open(img_path).convert("RGB")
-    img = img.resize(IMG_SIZE)
-    img_array = np.array(img) / 255.0
+    img = img.resize(IMG_SIZE, Image.LANCZOS)
+    img_array = np.array(img, dtype=np.float32) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    if "image" not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+
+    file = request.files["image"]
+
+    if file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+
+    img_path = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
+    file.save(img_path)
+
+    try:
+        img_array    = preprocess_image(img_path)
+        predictions  = model.predict(img_array, verbose=0)
+        predicted_idx = int(np.argmax(predictions[0]))
+        confidence    = float(np.max(predictions[0])) * 100
+        disease_name  = class_labels[predicted_idx]
+        med_info      = get_medication(disease_name)
+
+        # Free memory immediately
+        del img_array, predictions
+        import gc
+        gc.collect()
+
+        return jsonify({
+            "disease":     disease_name,
+            "confidence":  round(confidence, 2),
+            "medicine":    med_info["medicine"],
+            "treatment":   med_info["treatment"],
+            "precautions": med_info["precautions"],
+            "image_path":  f"static/uploads/{file.filename}"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ── Helper: get medication info for predicted disease ──────
 def get_medication(disease_name):
