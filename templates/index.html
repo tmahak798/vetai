@@ -340,8 +340,7 @@
       const formData = new FormData();
       formData.append("image", selectedFile);
 
-      fetch("/predict", { method: "POST", body: formData })
-        .then(res => res.json())
+fetch("/predict", { method: "POST", body: formData, signal: AbortSignal.timeout(120000) })        .then(res => res.json())
         .then(data => {
           loader.style.display = "none";
 
@@ -375,10 +374,14 @@
           resultSec.scrollIntoView({ behavior: "smooth" });
         })
         .catch(err => {
-          loader.style.display = "none";
-          alert("Something went wrong. Make sure Flask is running.");
-          analyseBtn.disabled  = false;
-        });
+  loader.style.display = "none";
+  if (err.name === 'TimeoutError') {
+    alert("Server is waking up (cold start). Please wait 30 seconds and try again.");
+  } else {
+    alert("Something went wrong: " + err.message);
+  }
+  analyseBtn.disabled = false;
+});
     }
 
     function reset() {
